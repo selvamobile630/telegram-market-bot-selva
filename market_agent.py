@@ -5,9 +5,11 @@ import requests
 from openai import OpenAI
 
 # ---------- CONFIG: Actual Keys ----------
-OPENAI_API_KEY = "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"
-TELEGRAM_TOKEN = "8427842986:AAEkQfkJ5NxOtxst8TmHOOp8pdChP2j4qwg"
-TELEGRAM_CHAT_ID = "7259834532"
+import os
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
