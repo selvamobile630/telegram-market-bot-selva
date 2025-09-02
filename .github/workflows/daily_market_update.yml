@@ -26,6 +26,6 @@ jobs:
       - name: Run Market Update Script
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
           HF_API_KEY: ${{ secrets.HF_API_KEY }}
         run: python .github/workflows/market_update_runner.py
