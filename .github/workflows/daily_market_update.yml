@@ -1,19 +1,17 @@
-name: Daily Market Update (Hugging Face)
+name: Daily Market Update
 
 on:
   schedule:
-    - cron: '10 16 * * *'  # 16:10 UTC = 21:40 IST
-  workflow_dispatch:
+    - cron: '30 16 * * *'   # 9:40 PM IST = 16:10 UTC
+  workflow_dispatch:         # allow manual trigger
 
 jobs:
-  run-market-bot:
+  build:
     runs-on: ubuntu-latest
-    env:
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      CHAT_ID: ${{ secrets.CHAT_ID }}
-      HF_API_TOKEN: ${{ secrets.HF_API_TOKEN }}
+
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -21,13 +19,13 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install yfinance requests
-
-      - name: Debug Secrets
         run: |
-          echo "HF_API_TOKEN length: ${#HF_API_TOKEN}"
-          echo "TELEGRAM_BOT_TOKEN length: ${#TELEGRAM_BOT_TOKEN}"
-          echo "CHAT_ID: $CHAT_ID"
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: Run Market Bot with API Debugging
+      - name: Run Market Update Script
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          HF_API_KEY: ${{ secrets.HF_API_KEY }}
         run: python .github/workflows/market_update_runner.py
