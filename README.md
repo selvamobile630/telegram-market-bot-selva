@@ -1,8 +1,12 @@
-# Telegram Market Bot
+# Telegram Market Bot (Hugging Face)
 
-This bot sends a daily Telegram update of Sensex/Nifty with top gainers/losers
-and a brief AI-generated reason why the market was positive or negative.
+This bot fetches Indian stock market data daily and sends a summary + AI-generated explanation to Telegram.
 
-## Deployment
-- Free cloud hosting: Render
-- Keys are already included (not recommended for public repos)
+## Setup
+
+1. Add GitHub repository secrets:
+   - `TELEGRAM_BOT_TOKEN`
+   - `CHAT_ID`
+   - `HF_API_TOKEN`
+
+2. Push to `main` branch. The bot runs automatically via GitHub Actions daily at 9:40 PM IST.
