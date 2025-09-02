@@ -1,6 +1,6 @@
-yfinance
-openai
+Flask
 requests
+yfinance
 schedule
-pandas
-flask
+openai
+pytz
