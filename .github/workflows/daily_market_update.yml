@@ -1,16 +1,20 @@
-name: Daily Market Update
+name: Daily Market Update (Hugging Face)
 
+# Trigger workflow on schedule and manually
 on:
   schedule:
-    - cron: '15 13 * * *'  # 11:30 UTC = 17:00 IST
-  workflow_dispatch:      # allows manual run
+    - cron: '10 16 * * *'  # 16:10 UTC = 21:40 IST
+  workflow_dispatch:        # allows manual trigger
 
 jobs:
-  send_market_update:
+  run-market-bot:
     runs-on: ubuntu-latest
-
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      CHAT_ID: ${{ secrets.CHAT_ID }}
+      HF_API_TOKEN: ${{ secrets.HF_API_TOKEN }}
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Set up Python
@@ -21,12 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install yfinance requests openai pytz
+          pip install -r requirements.txt
 
-      - name: Run market update
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          python .github/workflows/market_update_runner.py
+      - name: Run Market Bot
+        run: python .github/workflows/market_update_runner.py
