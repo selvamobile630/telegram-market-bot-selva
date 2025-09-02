@@ -14,7 +14,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ---------- MARKET BOT LOGIC ----------
+# ---------- BOT LOGIC ----------
 def get_index_summary(ticker, name):
     index = yf.Ticker(ticker)
     hist = index.history(period="1d", interval="1m")
@@ -26,11 +26,9 @@ def get_index_summary(ticker, name):
     return f"{name}: {last_price:.2f}, {direction} by {change:.2f} points ({percent:.2f}%)"
 
 def get_top_gainers_losers():
-    nifty_stocks = [
-        "RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS",
-        "INFY.NS", "TCS.NS", "HINDUNILVR.NS",
-        "KOTAKBANK.NS", "LT.NS", "SBIN.NS", "BHARTIARTL.NS"
-    ]
+    nifty_stocks = ["RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS",
+                    "INFY.NS", "TCS.NS", "HINDUNILVR.NS",
+                    "KOTAKBANK.NS", "LT.NS", "SBIN.NS", "BHARTIARTL.NS"]
     performance = {}
     for stock in nifty_stocks:
         data = yf.Ticker(stock).history(period="1d")
@@ -88,12 +86,14 @@ def run_scheduler():
 # ---------- FLASK WRAPPER ----------
 app = Flask(__name__)
 
-# Run scheduler in a separate thread
-threading.Thread(target=run_scheduler).start()
+# Run scheduler in a separate daemon thread
+threading.Thread(target=run_scheduler, daemon=True).start()
 
 @app.route("/")
 def home():
     return "Telegram Market Bot is running!"
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    # Render sets the PORT environment variable automatically
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
