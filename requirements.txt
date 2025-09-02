@@ -1,6 +1,4 @@
-Flask
-requests
 yfinance
-schedule
+requests
 openai
 pytz
