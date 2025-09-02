@@ -2,7 +2,7 @@ name: Daily Market Update
 
 on:
   schedule:
-    - cron: '45 12 * * *'  # 11:30 UTC = 17:00 IST
+    - cron: '15 13 * * *'  # 11:30 UTC = 17:00 IST
   workflow_dispatch:      # allows manual run
 
 jobs:
