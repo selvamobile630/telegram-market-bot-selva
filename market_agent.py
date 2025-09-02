@@ -6,6 +6,8 @@ import time
 import requests
 from openai import OpenAI
 import os
+import pytz
+from datetime import datetime
 
 # ---------- CONFIG ----------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -77,8 +79,18 @@ def daily_market_update():
     send_telegram(final_msg)
     print("✅ Message sent!")
 
+# ---------- SCHEDULER ----------
 def run_scheduler():
-    schedule.every().day.at("15:45").do(daily_market_update)
+    india = pytz.timezone("Asia/Kolkata")
+
+    def job():
+        now = datetime.now(india).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"Running job at {now} IST")
+        daily_market_update()
+
+    # Schedule daily at 5:00 PM IST
+    schedule.every().day.at("17:00").do(job)
+
     while True:
         schedule.run_pending()
         time.sleep(60)
