@@ -1,18 +1,20 @@
+from flask import Flask
+import threading
 import yfinance as yf
 import schedule
 import time
 import requests
 from openai import OpenAI
-
-# ---------- CONFIG: Actual Keys ----------
 import os
+
+# ---------- CONFIG ----------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+# ---------- MARKET BOT LOGIC ----------
 def get_index_summary(ticker, name):
     index = yf.Ticker(ticker)
     hist = index.history(period="1d", interval="1m")
@@ -68,18 +70,30 @@ def daily_market_update():
     sensex_summary = get_index_summary("^BSESN", "Sensex")
     nifty_summary = get_index_summary("^NSEI", "Nifty 50")
     gainers, losers = get_top_gainers_losers()
-
     market_summary = f"{sensex_summary}\n{nifty_summary}"
     reason = generate_reason(market_summary, gainers, losers)
-
-    final_msg = f"📊 Daily Market Update( Bot created by Selvamani):\n{market_summary}\n\n"                 f"🏆 Top Gainers: {', '.join(gainers)}\n"                 f"📉 Top Losers: {', '.join(losers)}\n\n"                 f"📝 Reason:\n{reason}"
-
+    final_msg = f"📊 Daily Market Update:\n{market_summary}\n\n" \
+                f"🏆 Top Gainers: {', '.join(gainers)}\n" \
+                f"📉 Top Losers: {', '.join(losers)}\n\n" \
+                f"📝 Reason:\n{reason}"
     send_telegram(final_msg)
     print("✅ Message sent!")
 
-schedule.every().day.at("15:45").do(daily_market_update)
+def run_scheduler():
+    schedule.every().day.at("15:45").do(daily_market_update)
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
 
-print("⏳ Telegram Market Bot running... will send updates daily at 3:45 PM IST")
-while True:
-    schedule.run_pending()
-    time.sleep(60)
+# ---------- FLASK WRAPPER ----------
+app = Flask(__name__)
+
+# Run scheduler in a separate thread
+threading.Thread(target=run_scheduler).start()
+
+@app.route("/")
+def home():
+    return "Telegram Market Bot is running!"
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
