@@ -89,7 +89,7 @@ def run_scheduler():
         daily_market_update()
 
     # Schedule daily at 5:00 PM IST
-    schedule.every().day.at("17:00").do(job)
+    schedule.every().day.at("18:00").do(job)
 
     while True:
         schedule.run_pending()
