@@ -70,7 +70,7 @@ def daily_market_update():
     gainers, losers = get_top_gainers_losers()
     market_summary = f"{sensex_summary}\n{nifty_summary}"
     reason = generate_reason(market_summary, gainers, losers)
-    final_msg = f"📊 Daily Market Update:\n{market_summary}\n\n" \
+    final_msg = f"📊 Daily Market Update - Bot created by Selvamani:\n{market_summary}\n\n" \
                 f"🏆 Top Gainers: {', '.join(gainers)}\n" \
                 f"📉 Top Losers: {', '.join(losers)}\n\n" \
                 f"📝 Reason:\n{reason}"
