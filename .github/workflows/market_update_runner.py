@@ -1,108 +1,77 @@
 import os
 import requests
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# Environment variables from GitHub Actions / local env
+# ---------- Environment variables ----------
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 HF_API_KEY = os.environ.get("HF_API_KEY")
 
-HF_MODEL = "facebook/bart-large-cnn"  # Example summarization model
+HF_MODEL = "tiiuae/falcon-7b-instruct"  # Instruction-tuned model for explanations
 
-# List of some Nifty 50 stocks to track (expandable)
-NIFTY_STOCKS = ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", 
-                "ICICIBANK.NS", "SBIN.NS", "ONGC.NS"]
+# ---------- Functions ----------
+def get_index_summary(ticker, name):
+    index = yf.Ticker(ticker)
+    hist = index.history(period="1d", interval="1m")
+    if hist.empty:
+        return f"{name}: Data not available", 0
+    last_price = hist['Close'][-1]
+    open_price = hist['Open'][0]
+    change = last_price - open_price
+    percent = (change / open_price) * 100
+    return f"{name} closed at {last_price:.2f} ({'+' if change>=0 else ''}{change:.2f} pts, {'+' if percent>=0 else ''}{percent:.2f}%)", change
 
-def fetch_market_summary():
-    """Fetch live Nifty and Sensex data with top movers."""
-    try:
-        # --- Sensex Data ---
-        sensex = yf.Ticker("^BSESN")
-        hist_sensex = sensex.history(period="1d")
-        open_sensex = hist_sensex["Open"].iloc[-1]
-        close_sensex = hist_sensex["Close"].iloc[-1]
-        change_points = close_sensex - open_sensex
-        change_pct = (change_points / open_sensex) * 100
+def get_top_gainers_losers():
+    nifty_stocks = ["RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS",
+                    "INFY.NS", "TCS.NS", "HINDUNILVR.NS",
+                    "KOTAKBANK.NS", "LT.NS", "SBIN.NS", "BHARTIARTL.NS"]
+    performance = {}
+    for stock in nifty_stocks:
+        data = yf.Ticker(stock).history(period="1d")
+        if not data.empty:
+            open_p = data['Open'][0]
+            close_p = data['Close'][-1]
+            change_pct = ((close_p - open_p) / open_p) * 100
+            performance[stock] = change_pct
+    sorted_perf = sorted(performance.items(), key=lambda x: x[1], reverse=True)
+    gainers = [f"{s.split('.')[0]} +{c:.2f}%" for s, c in sorted_perf[:3]]
+    losers = [f"{s.split('.')[0]} {c:.2f}%" for s, c in sorted_perf[-3:]]
+    return gainers, losers
 
-        sensex_summary = f"Sensex closed at {close_sensex:.2f} ({change_points:+.2f} pts, {change_pct:+.2f}%)"
-
-        # --- Nifty 50 Index Data ---
-        nifty = yf.Ticker("^NSEI")
-        hist_nifty = nifty.history(period="1d")
-        open_nifty = hist_nifty["Open"].iloc[-1]
-        close_nifty = hist_nifty["Close"].iloc[-1]
-        change_nifty = close_nifty - open_nifty
-        pct_nifty = (change_nifty / open_nifty) * 100
-        nifty_summary = f"Nifty 50 closed at {close_nifty:.2f} ({change_nifty:+.2f} pts, {pct_nifty:+.2f}%)"
-
-        # --- Top Movers ---
-        movers = {}
-        for symbol in NIFTY_STOCKS:
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="1d")
-            if not hist.empty:
-                o = hist["Open"].iloc[-1]
-                c = hist["Close"].iloc[-1]
-                pct = ((c - o) / o) * 100
-                movers[symbol] = pct
-
-        sorted_movers = sorted(movers.items(), key=lambda x: x[1], reverse=True)
-        top_gainers = [f"{s.replace('.NS','')} {p:+.2f}%" for s, p in sorted_movers[:3]]
-        top_losers = [f"{s.replace('.NS','')} {p:+.2f}%" for s, p in sorted_movers[-3:]]
-
-        return {
-            "sensex_summary": sensex_summary,
-            "nifty_summary": nifty_summary,
-            "gainers": top_gainers,
-            "losers": top_losers
-        }
-
-    except Exception as e:
-        return {
-            "sensex_summary": f"⚠️ Could not fetch Sensex data: {e}",
-            "nifty_summary": f"⚠️ Could not fetch Nifty data: {e}",
-            "gainers": [],
-            "losers": []
-        }
-
-def generate_reason(sensex_summary, nifty_summary, gainers, losers):
-    """Generate reasoning using Hugging Face summarization model."""
+def generate_reason(summary, gainers, losers):
     headers = {"Authorization": f"Bearer {HF_API_KEY}"}
     prompt = (
-        f"Sensex: {sensex_summary}\n"
-        f"Nifty 50: {nifty_summary}\n"
-        f"Top Gainers: {gainers}\n"
-        f"Top Losers: {losers}\n\n"
-        "Write a brief 3-4 line explanation why the market was positive or negative today."
+        f"Today's Indian stock market summary: {summary}\n"
+        f"Top Gainers: {', '.join(gainers)}\n"
+        f"Top Losers: {', '.join(losers)}\n\n"
+        f"Explain in 3-4 lines why the market went up or down today."
     )
-    payload = {"inputs": prompt}
+    payload = {
+        "inputs": prompt,
+        "parameters": {"max_new_tokens": 150}
+    }
 
     try:
         response = requests.post(
             f"https://api-inference.huggingface.co/models/{HF_MODEL}",
             headers=headers,
             json=payload,
-            timeout=30
+            timeout=60
         )
         if response.status_code != 200:
-            raise Exception(f"❌ Hugging Face API error: {response.text}")
+            return f"⚠️ Could not generate explanation: {response.text}"
 
         data = response.json()
-        if isinstance(data, list) and "summary_text" in data[0]:
-            return data[0]["summary_text"].strip()
-        elif isinstance(data, dict) and "error" in data:
-            raise Exception(f"❌ Hugging Face returned error: {data['error']}")
-        else:
-            return str(data)
+        if isinstance(data, list) and "generated_text" in data[0]:
+            return data[0]["generated_text"].strip()
+        return str(data)
     except Exception as e:
         return f"⚠️ Could not generate explanation: {e}"
 
 def send_to_telegram(message):
-    """Send message to Telegram chat."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
-
     try:
         response = requests.post(url, json=payload, timeout=10)
         if response.status_code != 200:
@@ -113,30 +82,31 @@ def send_to_telegram(message):
         return None
 
 def daily_market_update():
-    """Fetch data, summarize, and send message."""
-    # IST date
-    now_utc = datetime.utcnow()
-    ist_offset = timedelta(hours=5, minutes=30)
-    now_ist = now_utc + ist_offset
-    date_str = now_ist.strftime("%d %b %Y")
+    # Fetch market data
+    sensex_summary, sensex_change = get_index_summary("^BSESN", "Sensex")
+    nifty_summary, nifty_change = get_index_summary("^NSEI", "Nifty 50")
+    gainers, losers = get_top_gainers_losers()
 
-    market = fetch_market_summary()
-    reason = generate_reason(market["sensex_summary"], market["nifty_summary"], market["gainers"], market["losers"])
+    # Generate explanation
+    combined_summary = f"{sensex_summary}\n{nifty_summary}"
+    reason = generate_reason(combined_summary, gainers, losers)
 
-    message = (
-        f"*🤖 Bot created by Selvamani*\n"
-        f"📅 Date: {date_str}\n\n"
-        f"📈 *Daily Market Update*\n\n"
-        f"{market['sensex_summary']}\n"
-        f"{market['nifty_summary']}\n\n"
-        f"🏆 Top Gainers: {', '.join(market['gainers']) if market['gainers'] else 'N/A'}\n"
-        f"📉 Top Losers: {', '.join(market['losers']) if market['losers'] else 'N/A'}\n\n"
+    # Build final message
+    today = datetime.now().strftime("%d %b %Y")
+    final_msg = (
+        f"🤖 Bot created by Selvamani\n"
+        f"📅 Date: {today}\n\n"
+        f"📈 Daily Market Update\n\n"
+        f"{sensex_summary}\n{nifty_summary}\n\n"
+        f"🏆 Top Gainers: {', '.join(gainers)}\n"
+        f"📉 Top Losers: {', '.join(losers)}\n\n"
         f"🤔 Reason:\n{reason}"
     )
 
     print("[INFO] Sending message to Telegram...")
-    result = send_to_telegram(message)
+    result = send_to_telegram(final_msg)
     print(f"[INFO] Telegram response: {result}")
 
+# ---------- Run ----------
 if __name__ == "__main__":
     daily_market_update()
