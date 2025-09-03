@@ -3,31 +3,31 @@ import requests
 import yfinance as yf
 from datetime import datetime, timedelta
 
-# Environment variables from GitHub Actions / local env
+# ---------------- Environment Variables ----------------
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 HF_API_KEY = os.environ.get("HF_API_KEY")
 
-HF_MODEL = "facebook/bart-large-cnn"  # Example summarization model
+# Hugging Face instruct model for market reasoning
+HF_MODEL = "tiiuae/falcon-7b-instruct"
 
-# List of some Nifty 50 stocks to track (expandable)
-NIFTY_STOCKS = ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", 
+# List of tracked Nifty 50 stocks (expandable)
+NIFTY_STOCKS = ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS",
                 "ICICIBANK.NS", "SBIN.NS", "ONGC.NS"]
 
+# ---------------- Fetch Market Data ----------------
 def fetch_market_summary():
-    """Fetch live Nifty and Sensex data with top movers."""
     try:
-        # --- Sensex Data ---
+        # Sensex
         sensex = yf.Ticker("^BSESN")
         hist_sensex = sensex.history(period="1d")
         open_sensex = hist_sensex["Open"].iloc[-1]
         close_sensex = hist_sensex["Close"].iloc[-1]
         change_points = close_sensex - open_sensex
         change_pct = (change_points / open_sensex) * 100
-
         sensex_summary = f"Sensex closed at {close_sensex:.2f} ({change_points:+.2f} pts, {change_pct:+.2f}%)"
 
-        # --- Nifty 50 Index Data ---
+        # Nifty 50
         nifty = yf.Ticker("^NSEI")
         hist_nifty = nifty.history(period="1d")
         open_nifty = hist_nifty["Open"].iloc[-1]
@@ -36,7 +36,7 @@ def fetch_market_summary():
         pct_nifty = (change_nifty / open_nifty) * 100
         nifty_summary = f"Nifty 50 closed at {close_nifty:.2f} ({change_nifty:+.2f} pts, {pct_nifty:+.2f}%)"
 
-        # --- Top Movers ---
+        # Top Movers
         movers = {}
         for symbol in NIFTY_STOCKS:
             ticker = yf.Ticker(symbol)
@@ -66,17 +66,20 @@ def fetch_market_summary():
             "losers": []
         }
 
+# ---------------- Generate Market Reason ----------------
 def generate_reason(sensex_summary, nifty_summary, gainers, losers):
-    """Generate reasoning using Hugging Face summarization model."""
     headers = {"Authorization": f"Bearer {HF_API_KEY}"}
     prompt = (
         f"Sensex: {sensex_summary}\n"
         f"Nifty 50: {nifty_summary}\n"
         f"Top Gainers: {gainers}\n"
         f"Top Losers: {losers}\n\n"
-        "Write a brief 3-4 line explanation why the market was positive or negative today."
+        "Write a concise 3-4 line explanation of why the Indian stock market was positive or negative today."
     )
-    payload = {"inputs": prompt}
+    payload = {
+        "inputs": prompt,
+        "parameters": {"max_new_tokens": 200}
+    }
 
     try:
         response = requests.post(
@@ -86,35 +89,35 @@ def generate_reason(sensex_summary, nifty_summary, gainers, losers):
             timeout=30
         )
         if response.status_code != 200:
-            raise Exception(f"❌ Hugging Face API error: {response.text}")
+            raise Exception(f"Hugging Face API error: {response.text}")
 
         data = response.json()
-        if isinstance(data, list) and "summary_text" in data[0]:
-            return data[0]["summary_text"].strip()
+        # Falcon-style models return text under 'generated_text'
+        if isinstance(data, list) and "generated_text" in data[0]:
+            return data[0]["generated_text"].strip()
         elif isinstance(data, dict) and "error" in data:
-            raise Exception(f"❌ Hugging Face returned error: {data['error']}")
+            raise Exception(f"Hugging Face returned error: {data['error']}")
         else:
             return str(data)
+
     except Exception as e:
         return f"⚠️ Could not generate explanation: {e}"
 
+# ---------------- Send Telegram Message ----------------
 def send_to_telegram(message):
-    """Send message to Telegram chat."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
-
     try:
         response = requests.post(url, json=payload, timeout=10)
         if response.status_code != 200:
-            raise Exception(f"❌ Telegram API error: {response.text}")
+            raise Exception(f"Telegram API error: {response.text}")
         return response.json()
     except Exception as e:
         print(f"⚠️ Telegram send failed: {e}")
         return None
 
+# ---------------- Daily Market Update ----------------
 def daily_market_update():
-    """Fetch data, summarize, and send message."""
-    # IST date
     now_utc = datetime.utcnow()
     ist_offset = timedelta(hours=5, minutes=30)
     now_ist = now_utc + ist_offset
@@ -138,5 +141,6 @@ def daily_market_update():
     result = send_to_telegram(message)
     print(f"[INFO] Telegram response: {result}")
 
+# ---------------- Main ----------------
 if __name__ == "__main__":
     daily_market_update()
