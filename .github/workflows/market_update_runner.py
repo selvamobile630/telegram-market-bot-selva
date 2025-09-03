@@ -3,29 +3,57 @@ import requests
 import yfinance as yf
 from datetime import datetime
 
-# ---------------- CONFIG ----------------
+# ---------- CONFIG ----------
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 HF_API_KEY = os.environ.get("HF_API_KEY")
 
-HF_MODEL = "facebook/bart-large-cnn"  # Example summarization model
+HF_MODEL = "facebook/bart-large-cnn"  # Hugging Face summarization model
 
-# ---------------- MARKET DATA ----------------
-def get_index_summary(ticker, name):
-    """Fetch official daily open/close data and calculate points change."""
+# ---------- FETCH SENSEX ----------
+def get_sensex_google():
+    """
+    Fetch Sensex index data (current and today's change) from Google Finance.
+    """
+    try:
+        url = "https://www.google.com/finance/quote/BSESN:INDEXBOM"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        }
+        response = requests.get(url, headers=headers)
+        text = response.text
+
+        import re
+        match = re.search(
+            r'\"BSESN:INDEXBOM\",\"price\":([0-9.]+),\"change\":([\-0-9.]+),\"change_percent\":([\-0-9.]+)',
+            text
+        )
+        if match:
+            close_price = float(match.group(1))
+            change = float(match.group(2))
+            percent = float(match.group(3))
+            summary = f"Sensex closed at {close_price:.2f} ({'+' if change >=0 else ''}{change:.2f} pts, {'+' if percent >=0 else ''}{percent:.2f}%)"
+            return summary, change
+        else:
+            return "Sensex: Data not found", 0
+    except Exception as e:
+        return f"Sensex: Error fetching data ({e})", 0
+
+# ---------- FETCH NIFTY ----------
+def get_nifty_yf():
+    ticker = "^NSEI"
     index = yf.Ticker(ticker)
-    hist = index.history(period="1d", interval="1d")
+    hist = index.history(period="1d")
     if hist.empty:
-        return f"{name}: Data not available", 0
+        return "Nifty 50: Data not found"
+    last_price = hist['Close'][-1]
     open_price = hist['Open'][0]
-    close_price = hist['Close'][0]
-    change = close_price - open_price
+    change = last_price - open_price
     percent = (change / open_price) * 100
-    summary = f"{name} closed at {close_price:.2f} ({'+' if change>=0 else ''}{change:.2f} pts, {'+' if percent>=0 else ''}{percent:.2f}%)"
-    return summary, change
+    return f"Nifty 50 closed at {last_price:.2f} ({'+' if change>=0 else ''}{change:.2f} pts, {'+' if percent>=0 else ''}{percent:.2f}%)"
 
+# ---------- TOP 5 GAINERS/LOSERS ----------
 def get_top_gainers_losers():
-    """Fetch top 3 gainers and losers from a sample Nifty 50 stock list."""
     nifty_stocks = ["RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS",
                     "INFY.NS", "TCS.NS", "HINDUNILVR.NS",
                     "KOTAKBANK.NS", "LT.NS", "SBIN.NS", "BHARTIARTL.NS"]
@@ -34,21 +62,18 @@ def get_top_gainers_losers():
         data = yf.Ticker(stock).history(period="1d")
         if not data.empty:
             open_p = data['Open'][0]
-            close_p = data['Close'][0]
+            close_p = data['Close'][-1]
             change_pct = ((close_p - open_p) / open_p) * 100
             performance[stock] = change_pct
     sorted_perf = sorted(performance.items(), key=lambda x: x[1], reverse=True)
-    gainers = [f"{s.split('.')[0]} +{c:.2f}%" for s, c in sorted_perf[:3]]
-    losers = [f"{s.split('.')[0]} {c:.2f}%" for s, c in sorted_perf[-3:]]
+    gainers = [f"{s.split('.')[0]} +{c:.2f}%" for s, c in sorted_perf[:5]]
+    losers = [f"{s.split('.')[0]} {c:+.2f}%" for s, c in sorted_perf[-5:]]
     return gainers, losers
 
-# ---------------- HUGGING FACE REASON ----------------
-def generate_reason(summary_text, gainers, losers):
-    """Use Hugging Face model to generate 3-4 line reasoning."""
+# ---------- GENERATE REASON ----------
+def generate_reason(summary_text):
     headers = {"Authorization": f"Bearer {HF_API_KEY}"}
-    payload = {
-        "inputs": f"Market Summary: {summary_text}\nTop Gainers: {', '.join(gainers)}\nTop Losers: {', '.join(losers)}\n\nExplain in 3-4 lines why the market was positive or negative today."
-    }
+    payload = {"inputs": summary_text}
 
     try:
         response = requests.post(
@@ -57,45 +82,49 @@ def generate_reason(summary_text, gainers, losers):
             json=payload,
             timeout=30
         )
-        if response.status_code != 200:
-            return f"⚠️ Hugging Face API error: {response.text}"
-
         data = response.json()
         if isinstance(data, list) and "summary_text" in data[0]:
             return data[0]["summary_text"]
-        return str(data)
+        elif isinstance(data, dict) and "error" in data:
+            return f"⚠️ Hugging Face returned error: {data['error']}"
+        else:
+            return str(data)
     except Exception as e:
         return f"⚠️ Could not generate explanation: {e}"
 
-# ---------------- TELEGRAM ----------------
+# ---------- SEND TELEGRAM ----------
 def send_to_telegram(message):
-    """Send message to Telegram chat."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message}
     try:
         response = requests.post(url, json=payload, timeout=10)
-        if response.status_code != 200:
-            raise Exception(f"Telegram API error: {response.text}")
         return response.json()
     except Exception as e:
         print(f"⚠️ Telegram send failed: {e}")
         return None
 
-# ---------------- MAIN WORKFLOW ----------------
+# ---------- DAILY MARKET UPDATE ----------
 def daily_market_update():
-    today_str = datetime.now().strftime("%d %b %Y")
-    sensex_summary, sensex_change = get_index_summary("^BSESN", "Sensex")
-    nifty_summary, nifty_change = get_index_summary("^NSEI", "Nifty 50")
+    today_date = datetime.now().strftime("%d %b %Y")
+    sensex_summary, sensex_change = get_sensex_google()
+    nifty_summary = get_nifty_yf()
     gainers, losers = get_top_gainers_losers()
 
-    combined_summary = f"{sensex_summary}\n{nifty_summary}"
-    reason = generate_reason(combined_summary, gainers, losers)
+    summary_text = (
+        f"Sensex change today: {sensex_change:+.2f} pts\n"
+        f"{sensex_summary}\n{nifty_summary}\n"
+        f"Top Gainers: {', '.join(gainers)}\n"
+        f"Top Losers: {', '.join(losers)}"
+    )
+
+    reason = generate_reason(summary_text)
 
     message = (
         f"🤖 Bot created by Selvamani\n"
-        f"📅 Date: {today_str}\n\n"
+        f"📅 Date: {today_date}\n\n"
         f"📈 Daily Market Update\n\n"
-        f"{combined_summary}\n\n"
+        f"{sensex_summary}\n"
+        f"{nifty_summary}\n\n"
         f"🏆 Top Gainers: {', '.join(gainers)}\n"
         f"📉 Top Losers: {', '.join(losers)}\n\n"
         f"🤔 Reason:\n{reason}"
@@ -105,6 +134,6 @@ def daily_market_update():
     result = send_to_telegram(message)
     print(f"[INFO] Telegram response: {result}")
 
-# ---------------- RUN ----------------
+# ---------- MAIN ----------
 if __name__ == "__main__":
     daily_market_update()
