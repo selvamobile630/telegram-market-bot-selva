@@ -5,11 +5,13 @@ from datetime import datetime, timedelta
 
 # ---------------- Environment Variables ----------------
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+# Use comma-separated chat IDs for multiple recipients
+TELEGRAM_CHAT_IDS = os.environ.get("CHAT_IDS", "").split(",")  
 HF_API_KEY = os.environ.get("HF_API_KEY")
 
-# Hugging Face instruct model for market reasoning
-HF_MODEL = "tiiuae/falcon-7b-instruct"
+# Hugging Face model for summarization/explanation
+# Using a public model that works with inference API
+HF_MODEL = "facebook/bart-large-cnn"
 
 # List of tracked Nifty 50 stocks (expandable)
 NIFTY_STOCKS = ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS",
@@ -70,16 +72,12 @@ def fetch_market_summary():
 def generate_reason(sensex_summary, nifty_summary, gainers, losers):
     headers = {"Authorization": f"Bearer {HF_API_KEY}"}
     prompt = (
-        f"Sensex: {sensex_summary}\n"
-        f"Nifty 50: {nifty_summary}\n"
-        f"Top Gainers: {gainers}\n"
-        f"Top Losers: {losers}\n\n"
-        "Write a concise 3-4 line explanation of why the Indian stock market was positive or negative today."
+        f"Market Summary:\n{sensex_summary}\n{nifty_summary}\n"
+        f"Top Gainers: {', '.join(gainers)}\n"
+        f"Top Losers: {', '.join(losers)}\n\n"
+        "Explain in 3-4 sentences why the Indian stock market was positive or negative today."
     )
-    payload = {
-        "inputs": prompt,
-        "parameters": {"max_new_tokens": 200}
-    }
+    payload = {"inputs": prompt}
 
     try:
         response = requests.post(
@@ -92,9 +90,9 @@ def generate_reason(sensex_summary, nifty_summary, gainers, losers):
             raise Exception(f"Hugging Face API error: {response.text}")
 
         data = response.json()
-        # Falcon-style models return text under 'generated_text'
-        if isinstance(data, list) and "generated_text" in data[0]:
-            return data[0]["generated_text"].strip()
+        # bart-large-cnn returns 'summary_text'
+        if isinstance(data, list) and "summary_text" in data[0]:
+            return data[0]["summary_text"].strip()
         elif isinstance(data, dict) and "error" in data:
             raise Exception(f"Hugging Face returned error: {data['error']}")
         else:
@@ -105,16 +103,18 @@ def generate_reason(sensex_summary, nifty_summary, gainers, losers):
 
 # ---------------- Send Telegram Message ----------------
 def send_to_telegram(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
-    try:
-        response = requests.post(url, json=payload, timeout=10)
-        if response.status_code != 200:
-            raise Exception(f"Telegram API error: {response.text}")
-        return response.json()
-    except Exception as e:
-        print(f"⚠️ Telegram send failed: {e}")
-        return None
+    results = []
+    for chat_id in TELEGRAM_CHAT_IDS:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
+        try:
+            response = requests.post(url, json=payload, timeout=10)
+            if response.status_code != 200:
+                raise Exception(f"Telegram API error: {response.text}")
+            results.append(response.json())
+        except Exception as e:
+            print(f"⚠️ Telegram send failed for {chat_id}: {e}")
+    return results
 
 # ---------------- Daily Market Update ----------------
 def daily_market_update():
@@ -139,7 +139,7 @@ def daily_market_update():
 
     print("[INFO] Sending message to Telegram...")
     result = send_to_telegram(message)
-    print(f"[INFO] Telegram response: {result}")
+    print(f"[INFO] Telegram responses: {result}")
 
 # ---------------- Main ----------------
 if __name__ == "__main__":
