@@ -1,60 +1,78 @@
 import os
 import requests
-import yfinance as yf
-from datetime import datetime, timedelta
+from bs4 import BeautifulSoup
+from datetime import datetime
 
 # ---------- CONFIG ----------
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 HF_API_KEY = os.environ.get("HF_API_KEY")
-HF_MODEL = "facebook/bart-large-cnn"  # Example summarization model
+HF_MODEL = "facebook/bart-large-cnn"
 
-# ---------- FETCH MARKET DATA ----------
-def fetch_sensex_nifty():
-    sensex = yf.Ticker("^BSESN")
-    nifty = yf.Ticker("^NSEI")
+# ---------- FETCH SENSEX/NIFTY DATA ----------
+def fetch_sensex_nifty_moneycontrol():
+    urls = {
+        "Sensex": "https://www.moneycontrol.com/markets/indian-indices/bse-sensex-9.html",
+        "Nifty": "https://www.moneycontrol.com/markets/indian-indices/nifty-50-9.html"
+    }
+    
+    summaries = {}
+    
+    for index, url in urls.items():
+        response = requests.get(url, timeout=10)
+        soup = BeautifulSoup(response.content, "html.parser")
+        
+        main_value_tag = soup.find("div", class_="PT10 PB10")
+        if main_value_tag:
+            current_value_text = main_value_tag.find("strong").text.strip().replace(",", "")
+            current_value = float(current_value_text)
+            
+            change_tag = main_value_tag.find("span", class_="value_change")
+            if change_tag:
+                change_text = change_tag.text.strip().replace(",", "")
+                if "(" in change_text and ")" in change_text:
+                    pts = float(change_text.split("(")[0])
+                    pct = float(change_text.split("(")[1].replace(")", "").replace("%", ""))
+                else:
+                    pts, pct = 0.0, 0.0
+            else:
+                pts, pct = 0.0, 0.0
+            
+            summaries[index] = f"{index}: {current_value:.2f} ({pts:+.2f} pts, {pct:+.2f}%)"
+        else:
+            summaries[index] = f"{index}: Data not found"
+    
+    return summaries["Sensex"], summaries["Nifty"]
 
-    today = datetime.now()
-    yesterday = today - timedelta(days=2)  # Ensure we get last 2 trading days
+# ---------- FETCH TOP GAINERS/LOSERS FROM MONEYCONTROL ----------
+def fetch_top_gainers_losers_moneycontrol():
+    url = "https://www.moneycontrol.com/stocks/marketstats/indexcomp.php?optex=NSE&opttopic=indexcomp&index=9"  # Nifty 50 page
+    response = requests.get(url, timeout=10)
+    soup = BeautifulSoup(response.content, "html.parser")
 
-    # Fetch daily history
-    sensex_hist = sensex.history(start=yesterday.strftime("%Y-%m-%d"), end=today.strftime("%Y-%m-%d"))
-    nifty_hist = nifty.history(start=yesterday.strftime("%Y-%m-%d"), end=today.strftime("%Y-%m-%d"))
+    gainers = []
+    losers = []
 
-    # Closing prices
-    yesterday_sensex = sensex_hist["Close"][-2] if len(sensex_hist) >= 2 else sensex_hist["Close"][0]
-    today_sensex = sensex_hist["Close"][-1]
-    points_sensex = today_sensex - yesterday_sensex
-    percent_sensex = (points_sensex / yesterday_sensex) * 100
+    # Moneycontrol lists top gainers/losers in table rows
+    table_rows = soup.select("table#indicesTopGainers tr")  # Top gainers table
+    for row in table_rows[1:6]:  # Skip header, take top 5
+        cols = row.find_all("td")
+        if len(cols) >= 3:
+            name = cols[0].text.strip()
+            change_pct = cols[2].text.strip()
+            gainers.append(f"{name}: {change_pct}")
 
-    yesterday_nifty = nifty_hist["Close"][-2] if len(nifty_hist) >= 2 else nifty_hist["Close"][0]
-    today_nifty = nifty_hist["Close"][-1]
-    points_nifty = today_nifty - yesterday_nifty
-    percent_nifty = (points_nifty / yesterday_nifty) * 100
+    table_rows = soup.select("table#indicesTopLosers tr")  # Top losers table
+    for row in table_rows[1:6]:
+        cols = row.find_all("td")
+        if len(cols) >= 3:
+            name = cols[0].text.strip()
+            change_pct = cols[2].text.strip()
+            losers.append(f"{name}: {change_pct}")
 
-    sensex_summary = f"Sensex: {today_sensex:.2f} ({points_sensex:+.2f} pts, {percent_sensex:+.2f}%)"
-    nifty_summary = f"Nifty 50: {today_nifty:.2f} ({points_nifty:+.2f} pts, {percent_nifty:+.2f}%)"
-
-    return sensex_summary, nifty_summary, points_sensex, points_nifty
-
-def fetch_top_gainers_losers():
-    nifty_stocks = ["RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS",
-                    "INFY.NS", "TCS.NS", "HINDUNILVR.NS",
-                    "KOTAKBANK.NS", "LT.NS", "SBIN.NS", "BHARTIARTL.NS"]
-    performance = {}
-    for stock in nifty_stocks:
-        data = yf.Ticker(stock).history(period="1d")
-        if not data.empty:
-            open_p = data['Open'][0]
-            close_p = data['Close'][-1]
-            change_pct = ((close_p - open_p) / open_p) * 100
-            performance[stock.replace(".NS","")] = change_pct
-    sorted_perf = sorted(performance.items(), key=lambda x: x[1], reverse=True)
-    gainers = [f"{s}: {c:+.2f}%" for s, c in sorted_perf[:5]]
-    losers = [f"{s}: {c:+.2f}%" for s, c in sorted_perf[-5:]]
     return gainers, losers
 
-# ---------- GENERATE REASON ----------
+# ---------- GENERATE REASON USING HUGGINGFACE ----------
 def generate_reason(summary, gainers, losers):
     headers = {"Authorization": f"Bearer {HF_API_KEY}"}
     payload = {
@@ -96,8 +114,8 @@ def send_to_telegram(message):
 
 # ---------- DAILY MARKET UPDATE ----------
 def daily_market_update():
-    sensex_summary, nifty_summary, points_sensex, points_nifty = fetch_sensex_nifty()
-    gainers, losers = fetch_top_gainers_losers()
+    sensex_summary, nifty_summary = fetch_sensex_nifty_moneycontrol()
+    gainers, losers = fetch_top_gainers_losers_moneycontrol()
     reason = generate_reason(f"{sensex_summary}, {nifty_summary}", gainers, losers)
 
     message = (
