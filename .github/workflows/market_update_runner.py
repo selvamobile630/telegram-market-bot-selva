@@ -1,127 +1,83 @@
 import os
 import requests
-import yfinance as yf
-from datetime import datetime, timedelta
 
-# Load secrets from environment variables (GitHub Actions Secrets)
+# Read secrets from GitHub Actions environment
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
-HF_API_TOKEN = os.environ.get("HF_API_TOKEN")
+HF_API_KEY = os.environ.get("HF_API_KEY")
 
-# Hugging Face model (you can change to any text generation model)
-HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
-HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
+HF_MODEL = "facebook/bart-large-cnn"  # Example summarization model
 
-headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
-
-
-def fetch_market_data():
-    """Fetch Nifty50 data and some example stocks."""
-    indices = {"NSEI": "^NSEI", "SENSEX": "^BSESN"}
-    data = {}
-
-    for name, symbol in indices.items():
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="2d")
-        if len(hist) < 2:
-            continue
-
-        prev_close = hist["Close"].iloc[-2]
-        last_close = hist["Close"].iloc[-1]
-        change = ((last_close - prev_close) / prev_close) * 100
-        data[name] = {
-            "last_close": round(last_close, 2),
-            "change": round(change, 2),
-        }
-
-    return data
-
-
-def get_top_movers():
-    """Fetch top gainers/losers from example tickers."""
-    tickers = ["RELIANCE.NS", "INFY.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS"]
-    movers = []
-
-    for symbol in tickers:
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="2d")
-        if len(hist) < 2:
-            continue
-
-        prev_close = hist["Close"].iloc[-2]
-        last_close = hist["Close"].iloc[-1]
-        change = ((last_close - prev_close) / prev_close) * 100
-        movers.append((symbol, round(change, 2)))
-
-    # Sort movers by percentage change
-    movers.sort(key=lambda x: x[1], reverse=True)
-    gainers = movers[:2]
-    losers = movers[-2:]
-
-    return gainers, losers
-
-
-def generate_reason(market_summary, gainers, losers):
-    """Generate a short explanation using Hugging Face API."""
-    prompt = f"""
-Today’s Indian stock market summary:
-Indices: {market_summary}
-Top Gainers: {gainers}
-Top Losers: {losers}
-
-Explain in 3-4 sentences why the market may have moved this way.
-"""
-
-    payload = {
-        "inputs": prompt,
-        "parameters": {"max_new_tokens": 200, "temperature": 0.7},
+def fetch_market_summary():
+    """Dummy market data generator (replace with real API if available)."""
+    return {
+        "summary": "Indian stock market closed mixed today.",
+        "gainers": ["Reliance +2.3%", "Infosys +1.8%", "HDFC Bank +1.2%"],
+        "losers": ["TCS -1.5%", "ICICI Bank -0.9%", "ONGC -0.7%"]
     }
 
-    response = requests.post(HF_API_URL, headers=headers, json=payload)
-
-    # Debug logs
-    print("Response status:", response.status_code)
-    print("Response text preview:", response.text[:300])
-
-    if response.status_code != 200:
-        return f"Error from Hugging Face API: {response.text}"
+def generate_reason(summary, gainers, losers):
+    """Call Hugging Face API to generate reasoning."""
+    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+    payload = {
+        "inputs": f"Market Summary: {summary}\nTop Gainers: {gainers}\nTop Losers: {losers}\n\nExplain why this happened:"
+    }
 
     try:
+        response = requests.post(
+            f"https://api-inference.huggingface.co/models/{HF_MODEL}",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        print(f"[DEBUG] HuggingFace status: {response.status_code}")
+        if response.status_code == 401:
+            raise Exception("❌ Invalid Hugging Face token. Please check HF_API_KEY.")
+        if response.status_code != 200:
+            raise Exception(f"❌ Hugging Face API error: {response.text}")
+
         data = response.json()
-        if isinstance(data, list) and "generated_text" in data[0]:
-            return data[0]["generated_text"]
+        if isinstance(data, list) and "summary_text" in data[0]:
+            return data[0]["summary_text"]
         elif isinstance(data, dict) and "error" in data:
-            return f"Hugging Face Error: {data['error']}"
+            raise Exception(f"❌ Hugging Face returned error: {data['error']}")
         else:
             return str(data)
-    except Exception as e:
-        return f"Failed to parse HF response: {e}"
 
+    except Exception as e:
+        return f"⚠️ Could not generate explanation: {e}"
 
 def send_to_telegram(message):
-    """Send message to Telegram bot."""
+    """Send message to Telegram chat."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message}
-    resp = requests.post(url, json=payload)
-    print("Telegram response:", resp.text)
 
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        print(f"[DEBUG] Telegram status: {response.status_code}")
+        if response.status_code != 200:
+            raise Exception(f"❌ Telegram API error: {response.text}")
+        return response.json()
+    except Exception as e:
+        print(f"⚠️ Telegram send failed: {e}")
+        return None
 
 def daily_market_update():
-    """Main job to run every day."""
-    market_summary = fetch_market_data()
-    gainers, losers = get_top_movers()
-    reason = generate_reason(market_summary, gainers, losers)
+    """Main workflow: fetch data, summarize, and send message."""
+    market = fetch_market_summary()
+    reason = generate_reason(market["summary"], market["gainers"], market["losers"])
 
-    today = datetime.now().strftime("%d-%m-%Y")
-    message = f"📊 Market Update ({today}) 📊\n\n"
-    for idx, vals in market_summary.items():
-        message += f"{idx}: {vals['last_close']} ({vals['change']}%)\n"
+    message = (
+        f"📈 *Daily Market Update*\n\n"
+        f"Summary: {market['summary']}\n\n"
+        f"Top Gainers: {', '.join(market['gainers'])}\n"
+        f"Top Losers: {', '.join(market['losers'])}\n\n"
+        f"🤔 Reason: {reason}"
+    )
 
-    message += f"\n🔼 Gainers: {gainers}\n🔽 Losers: {losers}\n\n"
-    message += f"📝 Reason: {reason}"
-
-    send_to_telegram(message)
-
+    print("[INFO] Sending message to Telegram...")
+    result = send_to_telegram(message)
+    print(f"[INFO] Telegram response: {result}")
 
 if __name__ == "__main__":
     daily_market_update()
