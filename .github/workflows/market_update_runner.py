@@ -5,12 +5,10 @@ from datetime import datetime, timedelta
 
 # ---------------- Environment Variables ----------------
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-# Use comma-separated chat IDs for multiple recipients
-TELEGRAM_CHAT_IDS = os.environ.get("CHAT_IDS", "").split(",")  
+CHAT_ID = os.environ.get("CHAT_ID")  # single chat ID
 HF_API_KEY = os.environ.get("HF_API_KEY")
 
 # Hugging Face model for summarization/explanation
-# Using a public model that works with inference API
 HF_MODEL = "facebook/bart-large-cnn"
 
 # List of tracked Nifty 50 stocks (expandable)
@@ -90,7 +88,6 @@ def generate_reason(sensex_summary, nifty_summary, gainers, losers):
             raise Exception(f"Hugging Face API error: {response.text}")
 
         data = response.json()
-        # bart-large-cnn returns 'summary_text'
         if isinstance(data, list) and "summary_text" in data[0]:
             return data[0]["summary_text"].strip()
         elif isinstance(data, dict) and "error" in data:
@@ -103,18 +100,16 @@ def generate_reason(sensex_summary, nifty_summary, gainers, losers):
 
 # ---------------- Send Telegram Message ----------------
 def send_to_telegram(message):
-    results = []
-    for chat_id in TELEGRAM_CHAT_IDS:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
-        try:
-            response = requests.post(url, json=payload, timeout=10)
-            if response.status_code != 200:
-                raise Exception(f"Telegram API error: {response.text}")
-            results.append(response.json())
-        except Exception as e:
-            print(f"⚠️ Telegram send failed for {chat_id}: {e}")
-    return results
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code != 200:
+            raise Exception(f"Telegram API error: {response.text}")
+        return response.json()
+    except Exception as e:
+        print(f"⚠️ Telegram send failed: {e}")
+        return None
 
 # ---------------- Daily Market Update ----------------
 def daily_market_update():
@@ -139,7 +134,7 @@ def daily_market_update():
 
     print("[INFO] Sending message to Telegram...")
     result = send_to_telegram(message)
-    print(f"[INFO] Telegram responses: {result}")
+    print(f"[INFO] Telegram response: {result}")
 
 # ---------------- Main ----------------
 if __name__ == "__main__":
