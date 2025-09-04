@@ -1,3 +1,5 @@
-requests
+yfinance
 transformers
 torch
+requests
+huggingface_hub
