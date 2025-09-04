@@ -38,8 +38,12 @@ def fetch_indices():
     sensex_points = sensex_today - sensex_yesterday
     nifty_points = nifty_today - nifty_yesterday
 
-    sensex_summary = f"Sensex: {sensex_today:.2f} ({sensex_points:+.2f} pts, {(sensex_points/sensex_yesterday)*100:+.2f}%)"
-    nifty_summary = f"Nifty 50: {nifty_today:.2f} ({nifty_points:+.2f} pts, {(nifty_points/nifty_yesterday)*100:+.2f}%)"
+    # Emojis for index direction
+    sensex_emoji = "📈" if sensex_points >= 0 else "📉"
+    nifty_emoji = "📈" if nifty_points >= 0 else "📉"
+
+    sensex_summary = f"{sensex_emoji} Sensex: {sensex_today:.2f} ({sensex_points:+.2f} pts, {(sensex_points/sensex_yesterday)*100:+.2f}%)"
+    nifty_summary = f"{nifty_emoji} Nifty 50: {nifty_today:.2f} ({nifty_points:+.2f} pts, {(nifty_points/nifty_yesterday)*100:+.2f}%)"
 
     return sensex_summary, nifty_summary
 
@@ -61,28 +65,35 @@ def fetch_top_stocks():
             performance[s.replace(".NS","")] = change_pct
 
     sorted_perf = sorted(performance.items(), key=lambda x: x[1], reverse=True)
-    gainers = [f"{s}: {c:+.2f}%" for s, c in sorted_perf[:5]]
-    losers = [f"{s}: {c:+.2f}%" for s, c in sorted_perf[-5:]]
-    return gainers, losers
+
+    # Emojis for Telegram
+    gainers = [f"🟢 {s}: {c:+.2f}%" for s, c in sorted_perf[:5]]
+    losers = [f"🔴 {s}: {c:+.2f}%" for s, c in sorted_perf[-5:]]
+
+    biggest_gainer = gainers[0] if gainers else "N/A"
+    biggest_loser = losers[-1] if losers else "N/A"
+
+    return gainers, losers, biggest_gainer, biggest_loser
 
 # ---------------------------
-# Summarization using BART
+# Generate professional summary
 # ---------------------------
-def generate_summary(sensex, nifty, gainers, losers):
+def generate_summary(sensex, nifty, gainers, losers, biggest_gainer, biggest_loser):
     summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
     
-    # Line by line format for clarity
-    gainers_text = "\n".join(gainers)
-    losers_text = "\n".join(losers)
+    # Format gainers and losers for summary
+    gainers_text = ", ".join([g.split(" ",1)[1] for g in gainers])  # remove emoji for clean text
+    losers_text = ", ".join([l.split(" ",1)[1] for l in losers])
 
     combined_text = (
         f"{sensex}\n{nifty}\n"
-        f"Top Gainers:\n{gainers_text}\n"
-        f"Top Losers:\n{losers_text}"
+        f"Top Gainers: {gainers_text}\n"
+        f"Top Losers: {losers_text}\n\n"
+        f"Highlight: Biggest Gainer: {biggest_gainer.split(' ',1)[1]}, Biggest Loser: {biggest_loser.split(' ',1)[1]}"
     )
 
     try:
-        summary = summarizer(combined_text, max_length=150, min_length=50, do_sample=False)
+        summary = summarizer(combined_text, max_length=180, min_length=70, do_sample=False)
         return summary[0]['summary_text']
     except Exception as e:
         return f"⚠️ Could not generate summary: {e}"
@@ -105,8 +116,8 @@ def send_to_telegram(message):
 if __name__ == "__main__":
     today = datetime.now().strftime("%d %b %Y")
     sensex, nifty = fetch_indices()
-    gainers, losers = fetch_top_stocks()
-    reason = generate_summary(sensex, nifty, gainers, losers)
+    gainers, losers, biggest_gainer, biggest_loser = fetch_top_stocks()
+    reason = generate_summary(sensex, nifty, gainers, losers, biggest_gainer, biggest_loser)
 
     message = f"""
 Bot created by Selvamani
