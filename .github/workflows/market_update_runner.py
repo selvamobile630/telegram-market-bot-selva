@@ -15,9 +15,8 @@ CHAT_ID = os.environ.get("CHAT_ID")
 # ---------------------------
 def fetch_indices():
     today = datetime.now()
-    yesterday = today - timedelta(days=3)  # to ensure last trading day
+    yesterday = today - timedelta(days=3)
 
-    # ^BSESN = Sensex, ^NSEI = Nifty 50
     sensex = yf.Ticker("^BSESN")
     nifty = yf.Ticker("^NSEI")
 
@@ -48,7 +47,6 @@ def fetch_indices():
 # Fetch Top Gainers / Losers
 # ---------------------------
 def fetch_top_stocks():
-    # Example: Top 10 NSE stocks (can be adjusted)
     stocks = ["RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS",
               "INFY.NS", "TCS.NS", "HINDUNILVR.NS",
               "KOTAKBANK.NS", "LT.NS", "SBIN.NS", "BHARTIARTL.NS"]
@@ -72,7 +70,17 @@ def fetch_top_stocks():
 # ---------------------------
 def generate_summary(sensex, nifty, gainers, losers):
     summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-    combined_text = f"{sensex}\n{nifty}\nTop Gainers: {', '.join(gainers)}\nTop Losers: {', '.join(losers)}"
+    
+    # Line by line format for clarity
+    gainers_text = "\n".join(gainers)
+    losers_text = "\n".join(losers)
+
+    combined_text = (
+        f"{sensex}\n{nifty}\n"
+        f"Top Gainers:\n{gainers_text}\n"
+        f"Top Losers:\n{losers_text}"
+    )
+
     try:
         summary = summarizer(combined_text, max_length=150, min_length=50, do_sample=False)
         return summary[0]['summary_text']
@@ -109,8 +117,11 @@ Bot created by Selvamani
 {sensex}
 {nifty}
 
-🏆 Top Gainers: {', '.join(gainers)}
-📉 Top Losers: {', '.join(losers)}
+🏆 Top Gainers:
+{chr(10).join(gainers)}
+
+📉 Top Losers:
+{chr(10).join(losers)}
 
 🤔 Reason:
 {reason}
