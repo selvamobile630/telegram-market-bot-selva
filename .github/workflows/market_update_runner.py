@@ -2,117 +2,111 @@ import os
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
+from openai import OpenAI
 
 # ---------- CONFIG ----------
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
-HF_API_KEY = os.environ.get("HF_API_KEY")
-HF_MODEL = "facebook/bart-large-cnn"
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")  # Your GPT API key
 
-# ---------- FETCH SENSEX/NIFTY DATA ----------
-def fetch_sensex_nifty_moneycontrol():
-    urls = {
-        "Sensex": "https://www.moneycontrol.com/markets/indian-indices/bse-sensex-9.html",
-        "Nifty": "https://www.moneycontrol.com/markets/indian-indices/nifty-50-9.html"
-    }
-    
-    summaries = {}
-    
-    for index, url in urls.items():
-        try:
-            response = requests.get(url, timeout=10)
-            soup = BeautifulSoup(response.content, "html.parser")
-            
-            main_value_tag = soup.find("div", class_="PT10 PB10")
-            if main_value_tag:
-                current_value_text = main_value_tag.find("strong").text.strip().replace(",", "")
-                current_value = float(current_value_text)
-                
-                change_tag = main_value_tag.find("span", class_="value_change")
-                if change_tag:
-                    change_text = change_tag.text.strip().replace(",", "")
-                    if "(" in change_text and ")" in change_text:
-                        pts = float(change_text.split("(")[0])
-                        pct = float(change_text.split("(")[1].replace(")", "").replace("%", ""))
-                    else:
-                        pts, pct = 0.0, 0.0
-                else:
-                    pts, pct = 0.0, 0.0
-                
-                summaries[index] = f"{index}: {current_value:.2f} ({pts:+.2f} pts, {pct:+.2f}%)"
-            else:
-                summaries[index] = f"{index}: ⚠️ Data not found"
-        except Exception as e:
-            summaries[index] = f"{index}: ⚠️ Error fetching data ({e})"
-    
-    print("[DEBUG] Sensex/Nifty:", summaries)
-    return summaries.get("Sensex", "⚠️ Sensex error"), summaries.get("Nifty", "⚠️ Nifty error")
+client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ---------- FETCH TOP GAINERS/LOSERS FROM MONEYCONTROL ----------
-def fetch_top_gainers_losers_moneycontrol():
-    url = "https://www.moneycontrol.com/stocks/marketstats/indexcomp.php?optex=NSE&opttopic=indexcomp&index=9"
+# ---------- SCRAPE RAW DATA ----------
+def scrape_moneycontrol():
+    url = "https://www.moneycontrol.com/markets/indian-indices/"
+    response = requests.get(url, timeout=10)
+    soup = BeautifulSoup(response.content, "html.parser")
+    raw_text = soup.get_text(separator="\n")
+    return raw_text[:5000]
+
+def scrape_gainers_losers():
+    url_g = "https://www.moneycontrol.com/stocks/marketstats/nsegainer/index.php"
+    url_l = "https://www.moneycontrol.com/stocks/marketstats/nseloser/index.php"
+
+    response_g = requests.get(url_g, timeout=10)
+    soup_g = BeautifulSoup(response_g.content, "html.parser")
+    gainers_text = soup_g.get_text(separator="\n")
+
+    response_l = requests.get(url_l, timeout=10)
+    soup_l = BeautifulSoup(response_l.content, "html.parser")
+    losers_text = soup_l.get_text(separator="\n")
+
+    return gainers_text[:5000], losers_text[:5000]
+
+# ---------- PROCESS WITH GPT ----------
+def fetch_sensex_with_gpt():
     try:
-        response = requests.get(url, timeout=10)
-        soup = BeautifulSoup(response.content, "html.parser")
+        raw_data = scrape_moneycontrol()
+        prompt = (
+            "Here is raw scraped text from Moneycontrol containing Sensex and Nifty data:\n\n"
+            f"{raw_data}\n\n"
+            "Extract ONLY today's Sensex and Nifty values in this format:\n"
+            "Sensex: XXXX.XX (+/-YY.YY pts, +/-Z.ZZ%)\n"
+            "Nifty 50: XXXX.XX (+/-YY.YY pts, +/-Z.ZZ%)"
+        )
 
-        gainers, losers = [], []
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
 
-        # Gainers
-        table_rows = soup.select("table#indicesTopGainers tr")
-        for row in table_rows[1:6]:
-            cols = row.find_all("td")
-            if len(cols) >= 3:
-                name = cols[0].text.strip()
-                change_pct = cols[2].text.strip()
-                gainers.append(f"{name}: {change_pct}")
+        reply = response.choices[0].message.content.strip()
+        lines = reply.split("\n")
+        sensex_summary = lines[0] if len(lines) > 0 else "⚠️ Sensex data not available"
+        nifty_summary = lines[1] if len(lines) > 1 else "⚠️ Nifty data not available"
 
-        # Losers
-        table_rows = soup.select("table#indicesTopLosers tr")
-        for row in table_rows[1:6]:
-            cols = row.find_all("td")
-            if len(cols) >= 3:
-                name = cols[0].text.strip()
-                change_pct = cols[2].text.strip()
-                losers.append(f"{name}: {change_pct}")
+        return sensex_summary, nifty_summary
+    except Exception as e:
+        return f"⚠️ Error fetching Sensex ({e})", f"⚠️ Error fetching Nifty ({e})"
 
-        if not gainers: gainers = ["⚠️ No gainers data"]
-        if not losers: losers = ["⚠️ No losers data"]
+def fetch_gainers_losers_with_gpt():
+    try:
+        raw_gainers, raw_losers = scrape_gainers_losers()
+        prompt = (
+            "Here is raw scraped data from Moneycontrol.\n\n"
+            f"Top Gainers Data:\n{raw_gainers}\n\n"
+            f"Top Losers Data:\n{raw_losers}\n\n"
+            "Extract the **Top 5 Gainers and Top 5 Losers** with percentage change in this format:\n"
+            "🏆 Top Gainers: STOCK1 (+X.XX%), STOCK2 (+X.XX%), ...\n"
+            "📉 Top Losers: STOCK1 (-X.XX%), STOCK2 (-X.XX%), ..."
+        )
 
-        print("[DEBUG] Gainers:", gainers)
-        print("[DEBUG] Losers:", losers)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
+
+        reply = response.choices[0].message.content.strip()
+        lines = reply.split("\n")
+        gainers = lines[0] if lines else "⚠️ Gainers not available"
+        losers = lines[1] if len(lines) > 1 else "⚠️ Losers not available"
 
         return gainers, losers
     except Exception as e:
-        return [f"⚠️ Error fetching gainers ({e})"], [f"⚠️ Error fetching losers ({e})"]
+        return f"⚠️ Error fetching gainers ({e})", f"⚠️ Error fetching losers ({e})"
 
-# ---------- GENERATE REASON ----------
-def generate_reason(summary, gainers, losers):
-    if not HF_API_KEY:
-        return "⚠️ Hugging Face API key missing."
-
-    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
-    payload = {
-        "inputs": f"Market Summary: {summary}\nTop Gainers: {', '.join(gainers)}\nTop Losers: {', '.join(losers)}\n\nWrite a brief 3-4 line explanation of why the market was positive or negative today."
-    }
-
+def generate_reason_with_gpt(sensex_summary, nifty_summary, gainers, losers):
     try:
-        response = requests.post(
-            f"https://api-inference.huggingface.co/models/{HF_MODEL}",
-            headers=headers,
-            json=payload,
-            timeout=30
+        prompt = (
+            f"Market Summary:\n{sensex_summary}\n{nifty_summary}\n\n"
+            f"{gainers}\n{losers}\n\n"
+            "Based on this data, write a short 3-4 line explanation of why the Indian stock market "
+            "was positive or negative today. Mention key sectors or stocks influencing the move."
         )
-        data = response.json()
-        print("[DEBUG] Hugging Face Response:", data)
 
-        if isinstance(data, list) and "summary_text" in data[0]:
-            return data[0]["summary_text"]
-        else:
-            return "⚠️ Could not generate explanation"
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3
+        )
+
+        return response.choices[0].message.content.strip()
     except Exception as e:
-        return f"⚠️ HF API error: {e}"
+        return f"⚠️ Could not generate explanation ({e})"
 
-# ---------- SEND TO TELEGRAM ----------
+# ---------- TELEGRAM SEND ----------
 def send_to_telegram(message):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
         print("⚠️ Telegram credentials missing")
@@ -130,23 +124,22 @@ def send_to_telegram(message):
 
 # ---------- DAILY MARKET UPDATE ----------
 def daily_market_update():
-    sensex_summary, nifty_summary = fetch_sensex_nifty_moneycontrol()
-    gainers, losers = fetch_top_gainers_losers_moneycontrol()
-    reason = generate_reason(f"{sensex_summary}, {nifty_summary}", gainers, losers)
+    sensex_summary, nifty_summary = fetch_sensex_with_gpt()
+    gainers, losers = fetch_gainers_losers_with_gpt()
+    reason = generate_reason_with_gpt(sensex_summary, nifty_summary, gainers, losers)
 
     message = (
         f"🤖 Bot created by Selvamani\n"
         f"📅 Date: {datetime.now().strftime('%d %b %Y')}\n\n"
         f"📈 Daily Market Update\n\n"
         f"{sensex_summary}\n{nifty_summary}\n\n"
-        f"🏆 Top Gainers: {', '.join(gainers)}\n"
-        f"📉 Top Losers: {', '.join(losers)}\n\n"
+        f"{gainers}\n{losers}\n\n"
         f"🤔 Reason:\n{reason}"
     )
 
     print("[DEBUG] Final Message:\n", message)
     send_to_telegram(message)
 
-# ---------- RUN SCRIPT ----------
+# ---------- RUN ----------
 if __name__ == "__main__":
     daily_market_update()
