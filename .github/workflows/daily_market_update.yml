@@ -27,5 +27,5 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-          HF_API_KEY: ${{ secrets.HF_API_KEY }}
+          HF_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: python .github/workflows/market_update_runner.py
