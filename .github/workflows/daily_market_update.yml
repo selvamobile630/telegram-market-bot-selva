@@ -1,37 +1,34 @@
-name: Daily Market Update Bot (Yahoo Finance)
+name: Daily Market Update
 
 on:
   schedule:
-    - cron: "30 10 * * *"   # 10:30 UTC = 4:00 PM IST
-  workflow_dispatch:         # Manual trigger
+    # Runs every day at 4:00 PM IST (10:30 AM UTC)
+    - cron: '30 10 * * *'
+  workflow_dispatch:
 
 jobs:
-  run-bot:
+  run-market-bot:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout repository
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # 2️⃣ Setup Python 3.11
-      - name: Setup Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: 3.11
 
-      # 3️⃣ Install dependencies
-      - name: Install Python dependencies
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          # Install PyTorch CPU for transformers
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install huggingface_hub
+          pip install yfinance transformers torch requests
 
-      # 4️⃣ Run the bot
-      - name: Run Market Update Script
+      - name: Run market update bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: python .github/workflows/market_update_runner.py
+        run: |
+          python .github/workflows/market_update_runner.py
