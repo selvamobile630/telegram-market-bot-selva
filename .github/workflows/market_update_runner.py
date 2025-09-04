@@ -1,6 +1,5 @@
 import os
 import requests
-from bs4 import BeautifulSoup
 from datetime import datetime
 from transformers import pipeline
 
@@ -11,77 +10,85 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
 # ---------------------------
-# Scraper functions
+# Fetch Sensex/Nifty via Moneycontrol API
 # ---------------------------
-def scrape_indices():
-    url = "https://www.moneycontrol.com/markets/indian-indices/"
+def fetch_sensex_nifty():
     headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(url, headers=headers, timeout=10)
-    soup = BeautifulSoup(response.text, "html.parser")
 
-    # Try to get Sensex and Nifty using CSS classes
-    sensex_tag = soup.select_one(".indexBse")  # Moneycontrol class for Sensex
-    nifty_tag = soup.select_one(".indexNse")   # Moneycontrol class for Nifty
+    # Sensex
+    sensex_json = requests.get(
+        "https://priceapi.moneycontrol.com/pricefeed/indices/indianindices/11",
+        headers=headers, timeout=10
+    ).json()
+    sensex_val = sensex_json["data"]["lastPrice"]
+    sensex_change = sensex_json["data"]["pChange"]
+    sensex = f"Sensex: {sensex_val} ({sensex_change:+.2f}%)"
 
-    sensex = sensex_tag.text.strip() if sensex_tag else "⚠️ Sensex not found"
-    nifty = nifty_tag.text.strip() if nifty_tag else "⚠️ Nifty not found"
+    # Nifty
+    nifty_json = requests.get(
+        "https://priceapi.moneycontrol.com/pricefeed/indices/indianindices/9",
+        headers=headers, timeout=10
+    ).json()
+    nifty_val = nifty_json["data"]["lastPrice"]
+    nifty_change = nifty_json["data"]["pChange"]
+    nifty = f"Nifty 50: {nifty_val} ({nifty_change:+.2f}%)"
 
     return sensex, nifty
 
-def scrape_top_movers():
+# ---------------------------
+# Fetch Top 5 Gainers / Losers via API
+# ---------------------------
+def fetch_gainers_losers():
     headers = {"User-Agent": "Mozilla/5.0"}
 
-    # Top gainers
-    url_g = "https://www.moneycontrol.com/stocks/marketstats/nsegainer/index.php"
-    r_g = requests.get(url_g, headers=headers, timeout=10)
-    soup_g = BeautifulSoup(r_g.text, "html.parser")
-    gainers = [t.text.strip() for t in soup_g.select("table tr td a")][:5]
+    gainers_json = requests.get(
+        "https://priceapi.moneycontrol.com/pricefeed/topgainerslosers/nse/gainers",
+        headers=headers, timeout=10
+    ).json()
+    losers_json = requests.get(
+        "https://priceapi.moneycontrol.com/pricefeed/topgainerslosers/nse/losers",
+        headers=headers, timeout=10
+    ).json()
 
-    # Top losers
-    url_l = "https://www.moneycontrol.com/stocks/marketstats/nseloser/index.php"
-    r_l = requests.get(url_l, headers=headers, timeout=10)
-    soup_l = BeautifulSoup(r_l.text, "html.parser")
-    losers = [t.text.strip() for t in soup_l.select("table tr td a")][:5]
-
-    # Fallback if empty
-    gainers = gainers if gainers else ["⚠️ Gainers not found"]
-    losers = losers if losers else ["⚠️ Losers not found"]
+    gainers = [f"{item['company']} ({item['changePercent']}%)" for item in gainers_json["data"][:5]]
+    losers = [f"{item['company']} ({item['changePercent']}%)" for item in losers_json["data"][:5]]
 
     return gainers, losers
 
 # ---------------------------
 # Summarization using BART
 # ---------------------------
-def generate_summary(text):
+def generate_summary(sensex, nifty, gainers, losers):
     summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
+    combined_text = f"{sensex}\n{nifty}\nTop Gainers: {', '.join(gainers)}\nTop Losers: {', '.join(losers)}"
     try:
-        summary = summarizer(text, max_length=150, min_length=50, do_sample=False)
+        summary = summarizer(combined_text, max_length=150, min_length=50, do_sample=False)
         return summary[0]['summary_text']
     except Exception as e:
         return f"⚠️ Could not generate summary: {e}"
 
 # ---------------------------
-# Telegram sender
+# Send message to Telegram
 # ---------------------------
 def send_to_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
-        requests.post(url, data=payload)
+        r = requests.post(url, data=payload)
+        print("[INFO] Telegram response:", r.text)
     except Exception as e:
         print(f"⚠️ Telegram send failed: {e}")
 
 # ---------------------------
-# Main function
+# Main
 # ---------------------------
 if __name__ == "__main__":
     today = datetime.now().strftime("%d %b %Y")
 
     try:
-        sensex, nifty = scrape_indices()
-        gainers, losers = scrape_top_movers()
-        combined_text = f"{sensex}\n{nifty}\nTop Gainers: {', '.join(gainers)}\nTop Losers: {', '.join(losers)}"
-        reason = generate_summary(combined_text)
+        sensex, nifty = fetch_sensex_nifty()
+        gainers, losers = fetch_gainers_losers()
+        reason = generate_summary(sensex, nifty, gainers, losers)
 
         message = f"""
 Bot created by Selvamani
