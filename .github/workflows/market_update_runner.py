@@ -1,7 +1,8 @@
 import os
-import requests
-from datetime import datetime
+import yfinance as yf
+from datetime import datetime, timedelta
 from transformers import pipeline
+import requests
 
 # ---------------------------
 # Telegram setup
@@ -10,49 +11,60 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
 # ---------------------------
-# Fetch Sensex/Nifty via Moneycontrol API
+# Fetch Sensex and Nifty
 # ---------------------------
-def fetch_sensex_nifty():
-    headers = {"User-Agent": "Mozilla/5.0"}
+def fetch_indices():
+    today = datetime.now()
+    yesterday = today - timedelta(days=3)  # to ensure last trading day
 
-    # Sensex
-    sensex_json = requests.get(
-        "https://priceapi.moneycontrol.com/pricefeed/indices/indianindices/11",
-        headers=headers, timeout=10
-    ).json()
-    sensex_val = sensex_json["data"]["lastPrice"]
-    sensex_change = sensex_json["data"]["pChange"]
-    sensex = f"Sensex: {sensex_val} ({sensex_change:+.2f}%)"
+    # ^BSESN = Sensex, ^NSEI = Nifty 50
+    sensex = yf.Ticker("^BSESN")
+    nifty = yf.Ticker("^NSEI")
 
-    # Nifty
-    nifty_json = requests.get(
-        "https://priceapi.moneycontrol.com/pricefeed/indices/indianindices/9",
-        headers=headers, timeout=10
-    ).json()
-    nifty_val = nifty_json["data"]["lastPrice"]
-    nifty_change = nifty_json["data"]["pChange"]
-    nifty = f"Nifty 50: {nifty_val} ({nifty_change:+.2f}%)"
+    sensex_hist = sensex.history(start=yesterday.strftime("%Y-%m-%d"), end=today.strftime("%Y-%m-%d"))
+    nifty_hist = nifty.history(start=yesterday.strftime("%Y-%m-%d"), end=today.strftime("%Y-%m-%d"))
 
-    return sensex, nifty
+    if len(sensex_hist) >= 2:
+        sensex_yesterday = sensex_hist["Close"][-2]
+        sensex_today = sensex_hist["Close"][-1]
+    else:
+        sensex_yesterday = sensex_today = sensex_hist["Close"][0]
+
+    if len(nifty_hist) >= 2:
+        nifty_yesterday = nifty_hist["Close"][-2]
+        nifty_today = nifty_hist["Close"][-1]
+    else:
+        nifty_yesterday = nifty_today = nifty_hist["Close"][0]
+
+    sensex_points = sensex_today - sensex_yesterday
+    nifty_points = nifty_today - nifty_yesterday
+
+    sensex_summary = f"Sensex: {sensex_today:.2f} ({sensex_points:+.2f} pts, {(sensex_points/sensex_yesterday)*100:+.2f}%)"
+    nifty_summary = f"Nifty 50: {nifty_today:.2f} ({nifty_points:+.2f} pts, {(nifty_points/nifty_yesterday)*100:+.2f}%)"
+
+    return sensex_summary, nifty_summary
 
 # ---------------------------
-# Fetch Top 5 Gainers / Losers via API
+# Fetch Top Gainers / Losers
 # ---------------------------
-def fetch_gainers_losers():
-    headers = {"User-Agent": "Mozilla/5.0"}
+def fetch_top_stocks():
+    # Example: Top 10 NSE stocks (can be adjusted)
+    stocks = ["RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS",
+              "INFY.NS", "TCS.NS", "HINDUNILVR.NS",
+              "KOTAKBANK.NS", "LT.NS", "SBIN.NS", "BHARTIARTL.NS"]
 
-    gainers_json = requests.get(
-        "https://priceapi.moneycontrol.com/pricefeed/topgainerslosers/nse/gainers",
-        headers=headers, timeout=10
-    ).json()
-    losers_json = requests.get(
-        "https://priceapi.moneycontrol.com/pricefeed/topgainerslosers/nse/losers",
-        headers=headers, timeout=10
-    ).json()
+    performance = {}
+    for s in stocks:
+        hist = yf.Ticker(s).history(period="1d")
+        if not hist.empty:
+            open_p = hist['Open'][0]
+            close_p = hist['Close'][-1]
+            change_pct = ((close_p - open_p)/open_p)*100
+            performance[s.replace(".NS","")] = change_pct
 
-    gainers = [f"{item['company']} ({item['changePercent']}%)" for item in gainers_json["data"][:5]]
-    losers = [f"{item['company']} ({item['changePercent']}%)" for item in losers_json["data"][:5]]
-
+    sorted_perf = sorted(performance.items(), key=lambda x: x[1], reverse=True)
+    gainers = [f"{s}: {c:+.2f}%" for s, c in sorted_perf[:5]]
+    losers = [f"{s}: {c:+.2f}%" for s, c in sorted_perf[-5:]]
     return gainers, losers
 
 # ---------------------------
@@ -68,7 +80,7 @@ def generate_summary(sensex, nifty, gainers, losers):
         return f"⚠️ Could not generate summary: {e}"
 
 # ---------------------------
-# Send message to Telegram
+# Send Telegram
 # ---------------------------
 def send_to_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -84,13 +96,11 @@ def send_to_telegram(message):
 # ---------------------------
 if __name__ == "__main__":
     today = datetime.now().strftime("%d %b %Y")
+    sensex, nifty = fetch_indices()
+    gainers, losers = fetch_top_stocks()
+    reason = generate_summary(sensex, nifty, gainers, losers)
 
-    try:
-        sensex, nifty = fetch_sensex_nifty()
-        gainers, losers = fetch_gainers_losers()
-        reason = generate_summary(sensex, nifty, gainers, losers)
-
-        message = f"""
+    message = f"""
 Bot created by Selvamani
 📅 Date: {today}
 
@@ -105,7 +115,4 @@ Bot created by Selvamani
 🤔 Reason:
 {reason}
 """
-    except Exception as e:
-        message = f"⚠️ Failed to fetch market update: {e}"
-
     send_to_telegram(message.strip())
